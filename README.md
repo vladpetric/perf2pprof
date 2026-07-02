@@ -16,6 +16,30 @@ Google's `perf_to_profile` does not currently decode the DWARF-only
 This tool avoids stale binary perf parsing by consuming `perf script`, which is
 the kernel-tools-supported text representation of the already-unwound stacks.
 
+## Installation
+
+Install directly from GitHub with Cargo:
+
+```sh
+cargo install --git https://github.com/vladpetric/perf2pprof
+```
+
+Cargo installs the binary into `~/.cargo/bin` by default. Make sure that
+directory is on your `PATH`:
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+Alternatively, build a release binary manually:
+
+```sh
+git clone https://github.com/vladpetric/perf2pprof
+cd perf2pprof
+cargo build --release
+install -D -m 0755 target/release/perf2pprof ~/.local/bin/perf2pprof
+```
+
 ## Collecting DWARF Perf Data
 
 Use DWARF call graphs when the binary was built without frame pointers or when
