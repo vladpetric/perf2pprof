@@ -1,12 +1,22 @@
-# perf2pprof and p2prof User Guide
+# p2prof User Guide
 
-`perf2pprof` converts Linux `perf.data` call-chain samples into pprof profiles.
-`p2prof` is the normal entry point: it accepts perf data directly, converts it
-temporarily, and forwards the rest of the command line to Google's pprof.
+`p2prof` is the normal entry point for inspecting Linux `perf.data` files with
+Google pprof. It accepts perf data directly, converts it temporarily, and
+forwards the remaining command line to pprof. Most users do not need to invoke
+`perf2pprof` or manage an intermediate `.pb.gz` profile.
 
-## Requirements
+The normal workflow is two commands:
+
+```sh
+perf record -F 99 -e cycles -g --call-graph dwarf,4096 \
+  -o workload.perf.data -- ./workload
+p2prof --event cycles -top ./workload workload.perf.data
+```
+
+## Prerequisites
 
 - Linux `perf` from the kernel-tools package matching the running kernel
+- a current Go toolchain for installing Google pprof
 - a current upstream Google pprof build
 - Graphviz `dot` for PNG, SVG, PDF, and web graph views
 - Rust and Cargo for installing `perf2pprof` and `p2prof`
@@ -131,8 +141,21 @@ profile.
 
 ### Low-level hardware counters
 
-Collect several PMU events in one run when comparisons must cover the exact
-same execution. Here each event is sampled at 99 interrupts per second:
+The event named by `-e` determines what is counted. The sampling option
+determines when that counter produces profile samples:
+
+- `-F 99 -e instructions` still uses the hardware retired-instructions
+  counter. The kernel dynamically adjusts its overflow period to target about
+  99 samples per second.
+- `-c 10000000 -e instructions` uses the same hardware counter but records a
+  sample after each 10 million retired instructions.
+- `-e cpu-clock` is a software event. It is fundamentally different from using
+  `-F` with hardware events such as `cycles` or `instructions`.
+
+Frequency sampling is useful when several events with very different natural
+rates must be attributed to the same execution. In the following command each
+hardware event targets 99 samples per second, producing roughly comparable
+graph density while covering the same execution:
 
 ```sh
 perf record -F 99 -g --call-graph dwarf,4096 \
@@ -160,6 +183,50 @@ p2prof --event instructions -top -nodecount=20 \
 
 Hardware event names and availability are CPU-specific. If a named event is
 unsupported, select a corresponding event listed by the local `perf` tool.
+
+#### Choosing frequency, period, or totals
+
+Use frequency sampling when the goal is a convenient multi-event profile from
+one matched execution. Because the kernel adjusts each event's period during
+the run, `-F` is less suitable when exact, repeatable overflow periods matter.
+
+Use separate fixed-period profiles for controlled microarchitectural stack
+attribution. Periods should reflect how often each event occurs; one shared
+period is usually inappropriate for events with very different rates:
+
+```sh
+perf record -c 10000000 -e instructions -g --call-graph dwarf,4096 \
+  -o instructions.perf.data -- ./workload
+p2prof --event instructions -top ./workload instructions.perf.data
+
+perf record -c 5000000 -e cycles -g --call-graph dwarf,4096 \
+  -o cycles.perf.data -- ./workload
+p2prof --event cycles -top ./workload cycles.perf.data
+
+perf record -c 10000 -e branch-misses -g --call-graph dwarf,4096 \
+  -o branch-misses.perf.data -- ./workload
+p2prof --event branch-misses -top ./workload branch-misses.perf.data
+
+perf record -c 10000 -e L1-dcache-load-misses -g --call-graph dwarf,4096 \
+  -o l1-misses.perf.data -- ./workload
+p2prof --event L1-dcache-load-misses -top ./workload l1-misses.perf.data
+```
+
+These periods are starting points, not universal settings. Increase a period
+when profiling overhead is too high; decrease it when the recording contains
+too few samples.
+
+Use `perf stat` when totals, rates, or ratios matter more than call-stack
+attribution:
+
+```sh
+perf stat -e cycles,instructions,branch-misses,L1-dcache-load-misses \
+  -- ./workload
+```
+
+`perf stat` does not produce stack samples and therefore does not create input
+for `p2prof`. It complements `perf record`: use `stat` for quantitative totals
+and `record` plus `p2prof` to locate where sampled events occurred.
 
 ## p2prof Command Model
 

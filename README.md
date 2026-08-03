@@ -1,24 +1,28 @@
-# perf2pprof
+# p2prof and perf2pprof
 
-`perf2pprof` converts `perf script` stack output into a gzipped pprof
-`profile.proto`.
+`p2prof` is the normal entry point for viewing Linux `perf.data` files with
+Google pprof. It accepts perf data directly, converts it temporarily with
+`perf2pprof`, and preserves the familiar pprof command-line interface:
+
+```sh
+perf record -F 99 -e cycles -g --call-graph dwarf,4096 \
+  -o profile.perf.data -- ./path/to/binary arg...
+p2prof --event cycles -top ./path/to/binary profile.perf.data
+```
 
 See [USER_GUIDE.md](USER_GUIDE.md) for modern pprof installation, extensive
 `p2prof` examples, web and static graph usage, and the reproducible zstd
 profiling benchmark.
 
-The main use case is Linux `perf record --call-graph dwarf` data for optimized
-production-style binaries built without frame pointers. Frame-pointer unwinding
-is fast, but on x86-64 it reserves `%rbp` as the frame pointer and reduces the
-general-purpose register budget available to the optimizer from 15 registers to
-14. DWARF call graphs let you profile binaries compiled with
-`-fomit-frame-pointer`, preserving that register for normal code generation
-while still collecting stack traces.
+## Prerequisites
 
-Google's `perf_to_profile` does not currently decode the DWARF-only
-`PERF_SAMPLE_REGS_USER` / `PERF_SAMPLE_STACK_USER` payloads in `perf.data`.
-This tool avoids stale binary perf parsing by consuming `perf script`, which is
-the kernel-tools-supported text representation of the already-unwound stacks.
+- Linux and a `perf` package matching the running kernel
+- Rust and Cargo to install `p2prof` and `perf2pprof`
+- a current Go toolchain to install Google pprof
+- a current upstream Google pprof, installed with Go rather than an old distro
+  `pprof`, `google-pprof`, or gperftools script
+- Graphviz `dot` for PNG, SVG, PDF, and interactive graph views
+- debug symbols when named internal functions are required
 
 ## Installation
 
@@ -69,7 +73,8 @@ Use DWARF call graphs when the binary was built without frame pointers or when
 you want to compare profile data without changing compiler flags:
 
 ```sh
-perf record -F 49 -g --call-graph dwarf -o profile.perf.data -- ./path/to/binary arg...
+perf record -F 49 -e cycles -g --call-graph dwarf,4096 \
+  -o profile.perf.data -- ./path/to/binary arg...
 p2prof --event cycles -top ./path/to/binary profile.perf.data
 ```
 
@@ -84,6 +89,22 @@ p2prof --event branch-misses -top ./path/to/binary counters.perf.data
 
 See the user guide for fixed counter-period collection, graphs, and web UI
 examples.
+
+The `-F` option controls sampling frequency, not whether an event is a hardware
+counter. `-F 99 -e instructions` still uses the hardware retired-instructions
+counter; the kernel adjusts its overflow period to target 99 samples per
+second. Use `-c` for a fixed raw-event period instead:
+
+```sh
+perf record -c 10000000 -e instructions -g --call-graph dwarf,4096 \
+  -o instructions.perf.data -- ./path/to/binary arg...
+p2prof --event instructions -top ./path/to/binary instructions.perf.data
+```
+
+Frequency sampling is convenient for collecting unlike events together because
+each event gets comparable sample density. For quantitative totals and ratios,
+use `perf stat`; for controlled stack attribution, use separate recordings with
+event-appropriate `-c` periods. The user guide explains these choices in detail.
 
 For longer-running programs, prefer attaching to the process or selected
 threads for a bounded interval:
@@ -112,24 +133,7 @@ perf record -c 10000000 -g --call-graph dwarf,4096 \
   -- sleep 60
 ```
 
-## Usage
-
-Convert an existing script dump:
-
-```sh
-perf script -i profile.perf.data > profile.perf-script.txt
-perf2pprof --script profile.perf-script.txt -o profile.pb.gz
-pprof -svg ./path/to/binary profile.pb.gz > profile.svg
-```
-
-Or let the tool invoke `perf script`:
-
-```sh
-perf2pprof --perf-data profile.perf.data -o profile.pb.gz
-pprof -top ./path/to/binary profile.pb.gz
-```
-
-## p2prof Wrapper
+## p2prof Command Model
 
 `p2prof` preserves the pprof command-line shape while accepting Linux perf data
 files directly. It recognizes perf data by its file header, so the input does
@@ -185,6 +189,36 @@ The output contains two sample values:
 - the perf event period, for example `cycles/cycles`
 
 The event period is the default pprof sample type.
+
+## Advanced Manual Conversion
+
+Use `perf2pprof` directly only when a persistent `.pb.gz` profile is useful.
+Convert an existing script dump:
+
+```sh
+perf script -i profile.perf.data > profile.perf-script.txt
+perf2pprof --script profile.perf-script.txt -o profile.pb.gz
+pprof -svg ./path/to/binary profile.pb.gz > profile.svg
+```
+
+Or let the converter invoke `perf script`:
+
+```sh
+perf2pprof --perf-data profile.perf.data -o profile.pb.gz
+pprof -top ./path/to/binary profile.pb.gz
+```
+
+## Why perf2pprof Exists
+
+The main use case is Linux `perf record --call-graph dwarf` data for optimized
+production binaries built without frame pointers. Frame-pointer unwinding is
+fast, but on x86-64 it reserves `%rbp`; DWARF call graphs preserve that register
+for normal code generation while still collecting stack traces.
+
+Google's `perf_to_profile` does not currently decode the DWARF-only
+`PERF_SAMPLE_REGS_USER` / `PERF_SAMPLE_STACK_USER` payloads in `perf.data`.
+`perf2pprof` instead consumes `perf script`, the kernel-tools-supported text
+representation of the already-unwound stacks.
 
 ## Integration Test
 
