@@ -55,7 +55,6 @@ struct Frame {
 
 #[derive(Debug, Clone)]
 struct RawSample {
-    comm: String,
     pid: i64,
     tid: i64,
     event: String,
@@ -67,10 +66,8 @@ struct RawSample {
 struct AggSample {
     samples: i64,
     period: i64,
-    comm: String,
     pid: i64,
     tid: i64,
-    event: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -206,7 +203,6 @@ fn parse_header(line: &str) -> Option<RawSample> {
 
     let _time = left_tokens.pop()?;
     let pid_tid = left_tokens.pop()?;
-    let comm = left_tokens.join(" ");
     let (pid, tid) = parse_pid_tid(pid_tid);
 
     let mut stack = Vec::new();
@@ -218,7 +214,6 @@ fn parse_header(line: &str) -> Option<RawSample> {
     }
 
     Some(RawSample {
-        comm,
         pid,
         tid,
         event: event.to_string(),
@@ -295,10 +290,8 @@ fn build_profile(samples: Vec<RawSample>, comments: &[String]) -> Result<Profile
         event_name = sample.event.clone();
         let key = StackKey(sample.stack);
         let entry = aggregate.entry(key).or_insert_with(|| AggSample {
-            comm: sample.comm.clone(),
             pid: sample.pid,
             tid: sample.tid,
-            event: sample.event.clone(),
             ..AggSample::default()
         });
         entry.samples += 1;
@@ -348,10 +341,8 @@ fn build_profile(samples: Vec<RawSample>, comments: &[String]) -> Result<Profile
     let mut next_function_id = 1_u64;
     let mut next_location_id = 1_u64;
 
-    let label_comm = strings.intern("comm");
     let label_pid = strings.intern("pid");
     let label_tid = strings.intern("tid");
-    let label_event = strings.intern("event");
 
     for (key, agg) in aggregate {
         let mut location_id = Vec::with_capacity(key.0.len());
@@ -400,12 +391,6 @@ fn build_profile(samples: Vec<RawSample>, comments: &[String]) -> Result<Profile
             value: vec![agg.samples, agg.period],
             label: vec![
                 Label {
-                    key: label_comm,
-                    str: strings.intern(&agg.comm),
-                    num: 0,
-                    num_unit: 0,
-                },
-                Label {
                     key: label_pid,
                     str: 0,
                     num: agg.pid,
@@ -416,12 +401,6 @@ fn build_profile(samples: Vec<RawSample>, comments: &[String]) -> Result<Profile
                     str: 0,
                     num: agg.tid,
                     num_unit: count_id,
-                },
-                Label {
-                    key: label_event,
-                    str: strings.intern(&agg.event),
-                    num: 0,
-                    num_unit: 0,
                 },
             ],
         });
@@ -442,13 +421,15 @@ fn normalize_event_name(event: &str) -> String {
     event.trim_end_matches(':').replace(':', "_")
 }
 
+// pprof concatenates unknown units directly to values, so custom perf event
+// units include their own separator.
 fn event_unit_name(event: &str) -> &'static str {
     if event.contains("cycles") {
-        "cycles"
+        " cycles"
     } else if event.contains("instructions") {
-        "instructions"
+        " instructions"
     } else {
-        "count"
+        " count"
     }
 }
 
@@ -528,7 +509,9 @@ fn diagnose_samples(samples: &[RawSample]) {
         bad_signs.push("many frames are raw addresses; symbolization may be incomplete");
     }
     if app_frame_count == 0 {
-        bad_signs.push("no main frames found; check that perf can find the profiled binary and debug info");
+        bad_signs.push(
+            "no main frames found; check that perf can find the profiled binary and debug info",
+        );
     }
 
     if bad_signs.is_empty() {
@@ -606,7 +589,6 @@ mod tests {
         let input = b"test_bin 123/456 10.25: 99 cycles:P:\n\t400123 leaf+0x10 (/bin/test)\n\t400100 caller (/bin/test)\n\n";
         let samples = parse_perf_script(&input[..]).expect("parse");
         assert_eq!(samples.len(), 1);
-        assert_eq!(samples[0].comm, "test_bin");
         assert_eq!(samples[0].pid, 123);
         assert_eq!(samples[0].tid, 456);
         assert_eq!(samples[0].period, 99);
@@ -621,21 +603,21 @@ mod tests {
         let input = b"       perf-exec  185184 1272593.206833:         16 cycles:P:  ffffffff9e4c7c44 [unknown] ([unknown])\n test_fullnode_a  185184 1272593.208016:    1513175 cycles:P:      75f939c28504 strlen@plt+0x4 (/usr/lib/x86_64-linux-gnu/libc.so.6)\n";
         let samples = parse_perf_script(&input[..]).expect("parse");
         assert_eq!(samples.len(), 2);
-        assert_eq!(samples[0].comm, "perf-exec");
         assert_eq!(samples[0].period, 16);
         assert_eq!(samples[0].stack.len(), 1);
         assert_eq!(samples[0].stack[0].function, "[unknown] 0xffffffff9e4c7c44");
-        assert_eq!(samples[1].comm, "test_fullnode_a");
         assert_eq!(samples[1].period, 1513175);
         assert_eq!(samples[1].stack.len(), 1);
         assert_eq!(samples[1].stack[0].function, "strlen@plt");
-        assert_eq!(samples[1].stack[0].mapping, "/usr/lib/x86_64-linux-gnu/libc.so.6");
+        assert_eq!(
+            samples[1].stack[0].mapping,
+            "/usr/lib/x86_64-linux-gnu/libc.so.6"
+        );
     }
 
     #[test]
     fn builds_pprof_with_leaf_first_locations() {
         let samples = vec![RawSample {
-            comm: "test_bin".to_string(),
             pid: 1,
             tid: 1,
             event: "cycles:P".to_string(),
@@ -671,6 +653,24 @@ mod tests {
             .find(|function| function.id == location.line[0].function_id)
             .expect("leaf function");
         assert_eq!(profile.string_table[function.name as usize], "leaf");
+
+        let labels = &profile.sample[0].label;
+        let label_keys = labels
+            .iter()
+            .map(|label| profile.string_table[label.key as usize].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(label_keys, vec!["pid", "tid"]);
+        assert!(labels.iter().all(|label| label.str == 0));
+
+        let event_type = &profile.sample_type[1];
+        assert_eq!(profile.string_table[event_type.unit as usize], " cycles");
+    }
+
+    #[test]
+    fn event_units_have_a_readable_separator() {
+        assert_eq!(event_unit_name("cycles:P"), " cycles");
+        assert_eq!(event_unit_name("instructions:u"), " instructions");
+        assert_eq!(event_unit_name("cache-misses"), " count");
     }
 
     #[test]
