@@ -140,7 +140,11 @@ fn read_samples(args: &Args) -> Result<Vec<RawSample>> {
     if let Some(path) = &args.perf_data {
         let perf = std::env::var_os("PERF").unwrap_or_else(|| "perf".into());
         let mut cmd = Command::new(perf);
-        cmd.arg("script").arg("-i").arg(path);
+        cmd.arg("script")
+            .arg("-i")
+            .arg(path)
+            .arg("-F")
+            .arg("comm,pid,tid,time,period,event,ip,sym,dso");
         cmd.args(&args.perf_args);
         cmd.stdout(Stdio::piped());
         let mut child = cmd.spawn().with_context(|| "spawn perf script")?;
