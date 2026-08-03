@@ -37,6 +37,10 @@ struct Args {
     #[arg(long = "perf-arg", requires = "perf_data", allow_hyphen_values = true)]
     perf_args: Vec<String>,
 
+    /// Convert only this event from a multi-event perf capture.
+    #[arg(long, value_name = "EVENT")]
+    event: Option<String>,
+
     /// Add a free-form pprof comment. Repeatable.
     #[arg(long = "comment")]
     comments: Vec<String>,
@@ -102,9 +106,15 @@ impl StringTable {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let samples = read_samples(&args)?;
+    let mut samples = read_samples(&args)?;
     if samples.is_empty() {
         return Err(anyhow!("no perf samples found"));
+    }
+    if let Some(event) = &args.event {
+        samples.retain(|sample| event_matches(&sample.event, event));
+        if samples.is_empty() {
+            return Err(anyhow!("no perf samples found for event {event}"));
+        }
     }
 
     if args.diagnose {
@@ -281,13 +291,22 @@ fn strip_symbol_offset(function: &str) -> &str {
 
 fn build_profile(samples: Vec<RawSample>, comments: &[String]) -> Result<Profile> {
     let mut aggregate: HashMap<StackKey, AggSample> = HashMap::new();
-    let mut event_name = "event".to_string();
+    let mut event_name: Option<String> = None;
 
     for sample in samples {
         if sample.stack.is_empty() {
             continue;
         }
-        event_name = sample.event.clone();
+        if let Some(existing) = &event_name {
+            if existing != &sample.event {
+                return Err(anyhow!(
+                    "multiple perf events found ({existing} and {}); select one with --event",
+                    sample.event
+                ));
+            }
+        } else {
+            event_name = Some(sample.event.clone());
+        }
         let key = StackKey(sample.stack);
         let entry = aggregate.entry(key).or_insert_with(|| AggSample {
             pid: sample.pid,
@@ -297,6 +316,8 @@ fn build_profile(samples: Vec<RawSample>, comments: &[String]) -> Result<Profile
         entry.samples += 1;
         entry.period += sample.period;
     }
+
+    let event_name = event_name.ok_or_else(|| anyhow!("no perf samples with stacks found"))?;
 
     let mut strings = StringTable::new();
     let samples_id = strings.intern("samples");
@@ -419,6 +440,13 @@ fn build_profile(samples: Vec<RawSample>, comments: &[String]) -> Result<Profile
 
 fn normalize_event_name(event: &str) -> String {
     event.trim_end_matches(':').replace(':', "_")
+}
+
+fn event_matches(recorded: &str, selected: &str) -> bool {
+    let recorded = recorded.trim_end_matches(':');
+    let selected = selected.trim_end_matches(':');
+    recorded == selected
+        || (!selected.contains(':') && recorded.split(':').next() == Some(selected))
 }
 
 // pprof concatenates unknown units directly to values, so custom perf event
@@ -671,6 +699,43 @@ mod tests {
         assert_eq!(event_unit_name("cycles:P"), " cycles");
         assert_eq!(event_unit_name("instructions:u"), " instructions");
         assert_eq!(event_unit_name("cache-misses"), " count");
+    }
+
+    #[test]
+    fn selects_events_with_or_without_perf_modifiers() {
+        assert!(event_matches("cycles:P", "cycles"));
+        assert!(event_matches("cycles:P", "cycles:P"));
+        assert!(!event_matches("cycles:P", "instructions"));
+        assert!(!event_matches("cycles:P", "cycles:u"));
+        assert!(event_matches("sched:sched_switch", "sched:sched_switch"));
+    }
+
+    #[test]
+    fn rejects_mixed_perf_events() {
+        let frame = Frame {
+            function: "leaf".to_string(),
+            address: 0x20,
+            mapping: "/bin/test".to_string(),
+        };
+        let samples = vec![
+            RawSample {
+                pid: 1,
+                tid: 1,
+                event: "cycles:P".to_string(),
+                period: 7,
+                stack: vec![frame.clone()],
+            },
+            RawSample {
+                pid: 1,
+                tid: 1,
+                event: "instructions:P".to_string(),
+                period: 11,
+                stack: vec![frame],
+            },
+        ];
+
+        let err = build_profile(samples, &[]).expect_err("mixed events must fail");
+        assert!(err.to_string().contains("select one with --event"));
     }
 
     #[test]

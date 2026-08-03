@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust and shell tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Run Rust tests
+        run: cargo test --all-targets
+      - name: Check shell scripts
+        run: |
+          bash -n scripts/zstd-profile-benchmark.sh
+          bash -n scripts/test-zstd-profile-benchmark.sh
+          bash -n scripts/test-user-guide-examples.sh
+
+  perf-integration:
+    name: Perf / ${{ matrix.test }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - benchmark
+          - frequency-fp
+          - frequency-dwarf
+          - counter-period
+          - multi-counter
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+      - name: Install profiling tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y graphviz linux-tools-common linux-tools-generic zstd
+          go install github.com/google/pprof@latest
+      - name: Configure perf access
+        run: |
+          sudo sysctl -w kernel.perf_event_paranoid=-1
+          sudo sysctl -w kernel.kptr_restrict=0 || true
+          perf_bin=$(find /usr/lib/linux-tools -type f -name perf -perm -111 | sort -V | tail -n 1)
+          test -n "$perf_bin"
+          "$perf_bin" version
+          printf 'PERF=%s\n' "$perf_bin" >> "$GITHUB_ENV"
+      - name: Run ${{ matrix.test }}
+        env:
+          FREQUENCY: 199
+          SIZE_MIB: 32
+        run: |
+          if [[ "${{ matrix.test }}" == benchmark ]]; then
+            scripts/test-zstd-profile-benchmark.sh
+          else
+            scripts/test-user-guide-examples.sh "${{ matrix.test }}"
+          fi
