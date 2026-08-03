@@ -70,6 +70,7 @@ jobs:
         env:
           FREQUENCY: 199
           SIZE_MIB: 32
+          FREQUENCY_EVENT: cpu-clock
           COUNTER_EVENT: cpu-clock
           COUNTER_PERIOD: 1000000
           MULTI_COUNTER_EVENTS: cpu-clock task-clock page-faults
