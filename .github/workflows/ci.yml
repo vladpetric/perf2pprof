@@ -18,6 +18,8 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
+      - name: Install build dependencies
+        run: sudo apt-get install -y protobuf-compiler
       - name: Check formatting
         run: cargo fmt --check
       - name: Run Rust tests
@@ -54,13 +56,13 @@ jobs:
       - name: Install profiling tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y graphviz linux-tools-common linux-tools-generic zstd
+          sudo apt-get install -y graphviz linux-tools-common linux-tools-generic protobuf-compiler zstd
           go install github.com/google/pprof@latest
       - name: Configure perf access
         run: |
           sudo sysctl -w kernel.perf_event_paranoid=-1
           sudo sysctl -w kernel.kptr_restrict=0 || true
-          perf_bin=$(find /usr/lib/linux-tools -type f -name perf -perm -111 | sort -V | tail -n 1)
+          perf_bin=$(find -L /usr/lib/linux-tools -type f -name perf -perm -111 | sort -V | tail -n 1)
           test -n "$perf_bin"
           "$perf_bin" version
           printf 'PERF=%s\n' "$perf_bin" >> "$GITHUB_ENV"
