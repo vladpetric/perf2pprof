@@ -138,7 +138,8 @@ fn read_samples(args: &Args) -> Result<Vec<RawSample>> {
     }
 
     if let Some(path) = &args.perf_data {
-        let mut cmd = Command::new("perf");
+        let perf = std::env::var_os("PERF").unwrap_or_else(|| "perf".into());
+        let mut cmd = Command::new(perf);
         cmd.arg("script").arg("-i").arg(path);
         cmd.args(&args.perf_args);
         cmd.stdout(Stdio::piped());

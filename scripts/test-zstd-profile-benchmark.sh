@@ -33,7 +33,12 @@ P2PROF="$root/target/release/p2prof" \
   --frequency "${FREQUENCY:-199}" \
   --out "$out"
 
-events=(cycles instructions branch-misses L1-dcache-load-misses)
+frequency_event=${FREQUENCY_EVENT:-cycles}
+microarch_events=${MICROARCH_EVENTS:-instructions branch-misses L1-dcache-load-misses}
+events=("$frequency_event")
+for event in $microarch_events; do
+  events+=("$event")
+done
 workloads=(compress decompress)
 symbolized=0
 

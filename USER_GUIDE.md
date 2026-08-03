@@ -355,6 +355,12 @@ compression and decompression. The tests never start the pprof web interface.
 They accept symbolized or unresolved frames. Set `KEEP_ARTIFACTS=1` to retain
 the generated perf data, reports, and graphs.
 
+GitHub Actions runs every case. Because GitHub-hosted virtual machines do not
+expose all hardware PMU events, CI substitutes `cpu-clock`, `task-clock`, and
+`page-faults` to exercise fixed-period and simultaneous multi-event recording.
+The script defaults remain `cycles`, `instructions`, `branch-misses`, and
+`L1-dcache-load-misses` for hardware-backed local runs.
+
 The runner uses system `zstd` quietly in single-threaded mode. It records and
 verifies both compression and decompression. For each workload it collects:
 

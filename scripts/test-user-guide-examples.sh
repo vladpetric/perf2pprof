@@ -15,7 +15,10 @@ Cases:
 Environment:
   SIZE_MIB=N          Input size in MiB (default: 32)
   FREQUENCY=N         Samples per second for frequency cases (default: 99)
-  INSTRUCTION_PERIOD=N  Instructions per sample (default: 10000000)
+  FREQUENCY_EVENT=E   Event for frequency cases (default: cycles)
+  COUNTER_EVENT=E     Event for the fixed-period case (default: instructions)
+  COUNTER_PERIOD=N    Events per sample (default: 10000000)
+  MULTI_COUNTER_EVENTS="E ..."  Events for the multi-counter case
   KEEP_ARTIFACTS=1    Retain the temporary output directory
   PERF, P2PROF, ZSTD  Override the corresponding commands
 EOF
@@ -55,10 +58,13 @@ trap cleanup EXIT
 
 size_mib=${SIZE_MIB:-32}
 frequency=${FREQUENCY:-99}
-instruction_period=${INSTRUCTION_PERIOD:-10000000}
-for value in "$size_mib" "$frequency" "$instruction_period"; do
+frequency_event=${FREQUENCY_EVENT:-cycles}
+counter_event=${COUNTER_EVENT:-instructions}
+counter_period=${COUNTER_PERIOD:-${INSTRUCTION_PERIOD:-10000000}}
+multi_counter_events=${MULTI_COUNTER_EVENTS:-instructions branch-misses L1-dcache-load-misses}
+for value in "$size_mib" "$frequency" "$counter_period"; do
   if [[ ! $value =~ ^[1-9][0-9]*$ ]]; then
-    printf 'SIZE_MIB, FREQUENCY, and INSTRUCTION_PERIOD must be positive integers\n' >&2
+    printf 'SIZE_MIB, FREQUENCY, and COUNTER_PERIOD must be positive integers\n' >&2
     exit 2
   fi
 done
@@ -72,7 +78,7 @@ for tool in cargo cmp dot "$perf" sha256sum "$zstd"; do
   fi
 done
 
-if ! "$perf" record -q -e cycles -o "$work/perf-probe.data" -- true; then
+if ! "$perf" record -q -e "$frequency_event" -o "$work/perf-probe.data" -- true; then
   printf 'SKIP: perf recording is not permitted in this environment\n' >&2
   exit 77
 fi
@@ -141,26 +147,29 @@ run_case() {
 }
 
 run_frequency_fp() {
-  run_case frequency-fp cycles \
-    "$perf" record -F "$frequency" -e cycles -g --call-graph fp
+  run_case frequency-fp "$frequency_event" \
+    "$perf" record -F "$frequency" -e "$frequency_event" -g --call-graph fp
 }
 
 run_frequency_dwarf() {
-  run_case frequency-dwarf cycles \
-    "$perf" record -F "$frequency" -e cycles -g --call-graph dwarf,4096
+  run_case frequency-dwarf "$frequency_event" \
+    "$perf" record -F "$frequency" -e "$frequency_event" -g --call-graph dwarf,4096
 }
 
 run_counter_period() {
-  run_case counter-period instructions \
-    "$perf" record -c "$instruction_period" -e instructions \
+  run_case counter-period "$counter_event" \
+    "$perf" record -c "$counter_period" -e "$counter_event" \
     -g --call-graph dwarf,4096
 }
 
 run_multi_counter() {
-  run_case multi-counter \
-    'instructions branch-misses L1-dcache-load-misses' \
-    "$perf" record -F "$frequency" -g --call-graph dwarf,4096 \
-    -e instructions -e branch-misses -e L1-dcache-load-misses
+  local events=()
+  local event
+  for event in $multi_counter_events; do
+    events+=( -e "$event" )
+  done
+  run_case multi-counter "$multi_counter_events" \
+    "$perf" record -F "$frequency" -g --call-graph dwarf,4096 "${events[@]}"
 }
 
 if [[ $case_name == all ]]; then

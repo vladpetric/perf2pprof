@@ -210,4 +210,7 @@ instead of `all` to run one case. These tests produce text and PNG output only;
 they do not start a web interface.
 
 GitHub Actions runs the Rust and shell tests, the benchmark smoke test, and
-each user-guide case as a separate CI matrix job on Ubuntu.
+each user-guide case as a separate CI matrix job on Ubuntu. GitHub-hosted
+runners substitute `cpu-clock`, `task-clock`, and `page-faults` for the hardware
+events that their virtual PMU does not expose. Local runs keep the hardware-
+counter defaults shown above.

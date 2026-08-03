@@ -12,7 +12,7 @@ Options:
   --out DIR       New output directory (default: /tmp/p2prof-zstd-<UTC time>)
   -h, --help      Show this help
 
-Environment overrides: PERF, P2PROF, ZSTD
+Environment overrides: PERF, P2PROF, ZSTD, FREQUENCY_EVENT, MICROARCH_EVENTS
 EOF
 }
 
@@ -62,6 +62,8 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 perf=${PERF:-perf}
 p2prof=${P2PROF:-p2prof}
 zstd=${ZSTD:-zstd}
+frequency_event=${FREQUENCY_EVENT:-cycles}
+microarch_events=${MICROARCH_EVENTS:-instructions branch-misses L1-dcache-load-misses}
 
 for tool in cargo cmp dot "$perf" "$p2prof" sha256sum "$zstd"; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -119,17 +121,17 @@ zstd_level=$level
 zstd=$zstd
 p2prof=$p2prof
 perf=$perf
-frequency_events=cycles
-microarchitecture_events=instructions,branch-misses,L1-dcache-load-misses
+frequency_events=$frequency_event
+microarchitecture_events=${microarch_events// /,}
 EOF
 
-frequency_record=("$perf" record -F "$frequency" -g --call-graph dwarf,4096 -e cycles)
-microarch_record=(
-  "$perf" record -F "$frequency" -g --call-graph dwarf,4096
-  -e instructions -e branch-misses -e L1-dcache-load-misses
-)
+frequency_record=("$perf" record -F "$frequency" -g --call-graph dwarf,4096 -e "$frequency_event")
+microarch_record=("$perf" record -F "$frequency" -g --call-graph dwarf,4096)
+for event in $microarch_events; do
+  microarch_record+=( -e "$event" )
+done
 
-printf 'Profiling single-threaded compression (cycles)...\n'
+printf 'Profiling single-threaded compression (%s)...\n' "$frequency_event"
 cat "$input" | "${frequency_record[@]}" \
   -o "$out/compress.frequency.perf.data" -- \
   "$zstd" -q -T1 "-$level" -o "$frequency_archive"
@@ -141,7 +143,7 @@ cat "$input" | "${microarch_record[@]}" \
   "$zstd" -q -T1 "-$level" -o "$microarch_archive"
 "$zstd" -q -T1 -dc "$microarch_archive" | cmp "$input" -
 
-printf 'Profiling verified single-threaded decompression (cycles)...\n'
+printf 'Profiling verified single-threaded decompression (%s)...\n' "$frequency_event"
 "${frequency_record[@]}" -o "$out/decompress.frequency.perf.data" -- \
   "$zstd" -q -T1 -dc "$frequency_archive" | cmp "$input" -
 
@@ -163,12 +165,10 @@ render() {
 }
 
 printf 'Rendering pprof reports...\n'
-render compress "$out/compress.frequency.perf.data" cycles
-render compress "$out/compress.microarch.perf.data" \
-  instructions branch-misses L1-dcache-load-misses
-render decompress "$out/decompress.frequency.perf.data" cycles
-render decompress "$out/decompress.microarch.perf.data" \
-  instructions branch-misses L1-dcache-load-misses
+render compress "$out/compress.frequency.perf.data" "$frequency_event"
+render compress "$out/compress.microarch.perf.data" $microarch_events
+render decompress "$out/decompress.frequency.perf.data" "$frequency_event"
+render decompress "$out/decompress.microarch.perf.data" $microarch_events
 
 printf 'All decompression comparisons passed.\n'
 printf 'Artifacts: %s\n' "$out"
